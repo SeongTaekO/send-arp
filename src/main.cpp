@@ -18,7 +18,7 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
-std::string getMACAddress(const char *ip) {
+std::string getMACAddress(const char* interface) {
     struct sockaddr_in *addr;
     struct ifreq ifr;
 
@@ -30,10 +30,9 @@ std::string getMACAddress(const char *ip) {
     }
 
     // 인터페이스 설정
-    strncpy(ifr.ifr_name, "eth0", IFNAMSIZ); // 인터페이스 이름 설정
+    strncpy(ifr.ifr_name, interface, IFNAMSIZ); // 인터페이스 이름 설정
     addr = (struct sockaddr_in *)&ifr.ifr_addr;
     addr->sin_family = AF_INET;
-    inet_aton(ip, &addr->sin_addr);
 
     // MAC 주소 가져오기
     if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
@@ -139,10 +138,10 @@ int main(int argc, char* argv[]) {
     }
     
     std::string dummy_mac = "00:00:00:00:00:00";
-    
+    const char* interface = argv[1];
     for (int i=2; i<argc; i+=2) {
         //std::string attacker_mac = arp_request(argv[i], argv[i+1], dummy_mac, handle);
-        std::string attacker_mac = getMACAddress(argv[i+1]);
+        std::string attacker_mac = getMACAddress(interface);
         printf("Attacker MAC = %s\n", attacker_mac.c_str());
         
         std::string victim_mac = arp_request(argv[i], argv[i+1], attacker_mac, handle);
