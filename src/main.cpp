@@ -18,35 +18,6 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
-// IP 주소를 MAC 주소로 변환하여 반환하는 함수
-std::string get_attacker_mac(const char *interface) {
-    struct ifreq ifr;
-    unsigned char *macAddress;
-    std::string result;
-    
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    
-    ifr.ifr_addr.sa_family = AF_INET;
-    strncpy(ifr.ifr_name, interface, IFNAMSIZ - 1);
-    
-    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
-        perror("ioctl");
-        close(sock);
-        return result; // 에러가 발생하면 빈 문자열 반환
-    }
-    
-    macAddress = (unsigned char*)ifr.ifr_hwaddr.sa_data;
-    
-    // MAC 주소를 문자열로 변환하여 반환
-    char macStr[18]; // MAC 주소는 최대 17글자로 표현되며, 마지막에 널 문자를 추가해야 함
-    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
-             macAddress[0], macAddress[1], macAddress[2],
-             macAddress[3], macAddress[4], macAddress[5]);
-    
-    close(sock);
-    return macStr;
-}
-
 std::string getMACAddress(const char *ip) {
     struct sockaddr_in *addr;
     struct ifreq ifr;
@@ -167,11 +138,9 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
-    const char *interface = argv[1];
     std::string dummy_mac = "00:00:00:00:00:00";
     
     for (int i=2; i<argc; i+=2) {
-        //std::string attacker_mac = get_attacker_mac(argv[1]);
         //std::string attacker_mac = arp_request(argv[i], argv[i+1], dummy_mac, handle);
         std::string attacker_mac = getMACAddress(argv[i+1]);
         printf("Attacker MAC = %s\n", attacker_mac.c_str());
